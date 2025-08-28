@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>语音识别测试工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #recordBtn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        #recordBtn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        #recordBtn.recording {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(245, 87, 108, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(245, 87, 108, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(245, 87, 108, 0);
+            }
+        }
+
+        #uploadBtn {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            color: white;
+        }
+
+        #uploadBtn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(250, 112, 154, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status {
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 18px;
+            color: #666;
+            min-height: 30px;
+        }
+
+        .status.recording {
+            color: #f5576c;
+            font-weight: 600;
+        }
+
+        .visualizer {
+            width: 100%;
+            height: 100px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        .result-container {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            min-height: 150px;
+        }
+
+        .result-title {
+            font-size: 14px;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+
+        #result {
+            font-size: 18px;
+            line-height: 1.6;
+            color: #333;
+            word-wrap: break-word;
+        }
+
+        #result.error {
+            color: #f5576c;
+        }
+
+        #result.success {
+            color: #4caf50;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+
+        #fileInput {
+            position: absolute;
+            left: -9999px;
+        }
+
+        .timer {
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #f5576c;
+            margin: 10px 0;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .timer.show {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 语音识别测试工具</h1>
+        
+        <div class="status" id="status">准备就绪</div>
+        <div class="timer" id="timer">00:00</div>
+        
+        <div class="visualizer">
+            <canvas id="canvas"></canvas>
+        </div>
+        
+        <div class="controls">
+            <button id="recordBtn">开始录音</button>
+            <div class="file-input-wrapper">
+                <button id="uploadBtn">上传音频</button>
+                <input type="file" id="fileInput" accept="audio/*">
+            </div>
+        </div>
+        
+        <div class="result-container">
+            <div class="result-title">识别结果</div>
+            <div id="result">等待录音或上传音频文件...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5001/speech-to-text';
+        
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        let audioContext;
+        let analyser;
+        let microphone;
+        let javascriptNode;
+        let recordingStartTime;
+        let timerInterval;
+        
+        const recordBtn = document.getElementById('recordBtn');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const fileInput = document.getElementById('fileInput');
+        const statusDiv = document.getElementById('status');
+        const resultDiv = document.getElementById('result');
+        const canvas = document.getElementById('canvas');
+        const canvasContext = canvas.getContext('2d');
+        const timerDiv = document.getElementById('timer');
+        
+        // 初始化Canvas
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        
+        // 录音按钮点击事件
+        recordBtn.addEventListener('click', async () => {
+            if (!isRecording) {
+                await startRecording();
+            } else {
+                stopRecording();
+            }
+        });
+        
+        // 上传按钮点击事件
+        uploadBtn.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        // 文件选择事件
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                uploadAudio(file);
+            }
+        });
+        
+        // 开始录音
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                // 创建音频上下文和分析器
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                microphone = audioContext.createMediaStreamSource(stream);
+                javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+                
+                analyser.smoothingTimeConstant = 0.8;
+                analyser.fftSize = 1024;
+                
+                microphone.connect(analyser);
+                analyser.connect(javascriptNode);
+                javascriptNode.connect(audioContext.destination);
+                
+                // 音频可视化
+                javascriptNode.onaudioprocess = function() {
+                    const array = new Uint8Array(analyser.frequencyBinCount);
+                    analyser.getByteFrequencyData(array);
+                    drawVisualizer(array);
+                };
+                
+                // 创建MediaRecorder
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    await uploadAudio(audioBlob);
+                    
+                    // 停止所有音频处理
+                    if (microphone) microphone.disconnect();
+                    if (javascriptNode) javascriptNode.disconnect();
+                    if (analyser) analyser.disconnect();
+                    if (audioContext) audioContext.close();
+                    
+                    stream.getTracks().forEach(track => track.stop());
+                };
+                
+                mediaRecorder.start();
+                isRecording = true;
+                
+                recordBtn.textContent = '停止录音';
+                recordBtn.classList.add('recording');
+                statusDiv.textContent = '正在录音...';
+                statusDiv.classList.add('recording');
+                uploadBtn.disabled = true;
+                
+                // 开始计时
+                recordingStartTime = Date.now();
+                timerDiv.classList.add('show');
+                updateTimer();
+                timerInterval = setInterval(updateTimer, 100);
+                
+            } catch (err) {
+                console.error('无法访问麦克风:', err);
+                statusDiv.textContent = '错误: 无法访问麦克风';
+                resultDiv.textContent = '请确保浏览器有麦克风权限';
+                resultDiv.className = 'error';
+            }
+        }
+        
+        // 停止录音
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                isRecording = false;
+                
+                recordBtn.textContent = '开始录音';
+                recordBtn.classList.remove('recording');
+                statusDiv.textContent = '正在处理...';
+                statusDiv.classList.remove('recording');
+                uploadBtn.disabled = false;
+                
+                // 停止计时
+                clearInterval(timerInterval);
+                timerDiv.classList.remove('show');
+                
+                // 清空可视化
+                canvasContext.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        }
+        
+        // 更新计时器
+        function updateTimer() {
+            const elapsed = Date.now() - recordingStartTime;
+            const seconds = Math.floor(elapsed / 1000) % 60;
+            const minutes = Math.floor(elapsed / 60000);
+            timerDiv.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+        
+        // 绘制音频可视化
+        function drawVisualizer(array) {
+            canvasContext.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const barWidth = (canvas.width / array.length) * 2.5;
+            let barHeight;
+            let x = 0;
+            
+            for (let i = 0; i < array.length; i++) {
+                barHeight = array[i] / 2;
+                
+                const gradient = canvasContext.createLinearGradient(0, 0, 0, canvas.height);
+                gradient.addColorStop(0, '#667eea');
+                gradient.addColorStop(1, '#764ba2');
+                
+                canvasContext.fillStyle = gradient;
+                canvasContext.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+                
+                x += barWidth + 1;
+            }
+        }
+        
+        // 上传音频并获取识别结果
+        async function uploadAudio(audioData) {
+            try {
+                statusDiv.textContent = '正在识别...';
+                recordBtn.disabled = true;
+                uploadBtn.disabled = true;
+                
+                const formData = new FormData();
+                if (audioData instanceof Blob) {
+                    formData.append('audio', audioData, 'recording.wav');
+                } else {
+                    formData.append('audio', audioData);
+                }
+                
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusDiv.textContent = '识别成功';
+                    resultDiv.textContent = data.text || '(未识别到内容)';
+                    resultDiv.className = 'success';
+                } else {
+                    statusDiv.textContent = '识别失败';
+                    resultDiv.textContent = `错误: ${data.error}`;
+                    resultDiv.className = 'error';
+                }
+                
+            } catch (err) {
+                console.error('上传失败:', err);
+                statusDiv.textContent = '上传失败';
+                resultDiv.textContent = `错误: ${err.message}`;
+                resultDiv.className = 'error';
+            } finally {
+                recordBtn.disabled = false;
+                uploadBtn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
