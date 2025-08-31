@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastAPI 语音处理服务测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background-color: #fafafa;
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #555;
+            font-size: 1.2em;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            background-color: white;
+            transition: border-color 0.3s;
+        }
+        .upload-area:hover {
+            border-color: #007bff;
+        }
+        .upload-area.dragover {
+            border-color: #007bff;
+            background-color: #f8f9ff;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.info {
+            background-color: #cce7ff;
+            color: #004085;
+            border: 1px solid #b8daff;
+        }
+        .progress {
+            width: 100%;
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-bar {
+            height: 100%;
+            background-color: #007bff;
+            transition: width 0.3s ease;
+            border-radius: 10px;
+        }
+        .audio-controls {
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        audio {
+            flex: 1;
+        }
+        .result-info {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 15px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .record-controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        #recordBtn {
+            background-color: #dc3545;
+        }
+        #recordBtn:hover {
+            background-color: #c82333;
+        }
+        #recordBtn.recording {
+            background-color: #28a745;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 FastAPI 语音处理服务测试</h1>
+        
+        <!-- 服务状态检查 -->
+        <div class="section">
+            <h2>服务状态</h2>
+            <button onclick="checkServiceStatus()">检查服务状态</button>
+            <div id="serviceStatus"></div>
+        </div>
+
+        <!-- 录音功能 -->
+        <div class="section">
+            <h2>📹 录音测试</h2>
+            <p>直接录音并发送给豆包处理</p>
+            <div class="record-controls">
+                <button id="recordBtn" onclick="toggleRecording()">开始录音</button>
+                <button onclick="clearRecording()" disabled id="clearBtn">清除录音</button>
+            </div>
+            <div id="recordStatus"></div>
+            <div id="recordResult"></div>
+        </div>
+
+        <!-- 文件上传功能 -->
+        <div class="section">
+            <h2>📁 文件上传测试</h2>
+            <div class="upload-area" id="uploadArea">
+                <p>将音频文件拖放到这里，或点击选择文件</p>
+                <input type="file" id="audioFile" accept="audio/*" style="display: none;">
+                <button onclick="document.getElementById('audioFile').click()">选择音频文件</button>
+            </div>
+            <div id="fileInfo"></div>
+            
+            <div style="margin-top: 20px;">
+                <button onclick="processAudio()" id="processBtn" disabled>处理音频 (流式返回)</button>
+                <button onclick="processAudioJSON()" id="processJSONBtn" disabled>处理音频 (JSON返回)</button>
+            </div>
+            
+            <div class="progress" id="progressContainer" style="display: none;">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            
+            <div id="uploadStatus"></div>
+            <div id="uploadResult"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let recordedBlob = null;
+
+        // 服务状态检查
+        async function checkServiceStatus() {
+            const statusDiv = document.getElementById('serviceStatus');
+            statusDiv.innerHTML = '<div class="status info">检查中...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    statusDiv.innerHTML = `
+                        <div class="status success">
+                            ✅ 服务正常运行<br>
+                            状态: ${data.status}<br>
+                            服务: ${data.service}
+                        </div>
+                    `;
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `
+                    <div class="status error">
+                        ❌ 服务连接失败: ${error.message}<br>
+                        请确保 FastAPI 服务在 localhost:8000 运行
+                    </div>
+                `;
+            }
+        }
+
+        // 录音功能
+        async function toggleRecording() {
+            const recordBtn = document.getElementById('recordBtn');
+            const clearBtn = document.getElementById('clearBtn');
+            const statusDiv = document.getElementById('recordStatus');
+
+            if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+                // 开始录音
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                        }
+                    };
+
+                    mediaRecorder.onstop = () => {
+                        recordedBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        recordBtn.textContent = '开始录音';
+                        recordBtn.classList.remove('recording');
+                        clearBtn.disabled = false;
+                        
+                        statusDiv.innerHTML = `
+                            <div class="status success">
+                                ✅ 录音完成，大小: ${(recordedBlob.size / 1024).toFixed(1)} KB
+                                <div style="margin-top: 10px;">
+                                    <button onclick="processRecordedAudio()">发送给豆包处理</button>
+                                </div>
+                            </div>
+                        `;
+                    };
+
+                    mediaRecorder.start();
+                    recordBtn.textContent = '停止录音';
+                    recordBtn.classList.add('recording');
+                    statusDiv.innerHTML = '<div class="status info">🎙️ 正在录音...</div>';
+                    
+                } catch (error) {
+                    statusDiv.innerHTML = `<div class="status error">❌ 无法访问麦克风: ${error.message}</div>`;
+                }
+            } else {
+                // 停止录音
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            }
+        }
+
+        function clearRecording() {
+            recordedBlob = null;
+            audioChunks = [];
+            document.getElementById('clearBtn').disabled = true;
+            document.getElementById('recordStatus').innerHTML = '';
+            document.getElementById('recordResult').innerHTML = '';
+        }
+
+        async function processRecordedAudio() {
+            if (!recordedBlob) return;
+
+            const statusDiv = document.getElementById('recordStatus');
+            const resultDiv = document.getElementById('recordResult');
+            
+            statusDiv.innerHTML = '<div class="status info">🔄 正在处理录音...</div>';
+            
+            try {
+                const formData = new FormData();
+                formData.append('audio', recordedBlob, 'recording.wav');
+                
+                const response = await fetch(`${API_BASE}/api/v1/process-voice-json`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.success) {
+                    const data = result.data;
+                    statusDiv.innerHTML = '<div class="status success">✅ 处理完成</div>';
+                    
+                    // 创建音频播放器
+                    const audioData = `data:audio/pcm;base64,${data.audio_data}`;
+                    resultDiv.innerHTML = `
+                        <div class="result-info">
+                            <strong>识别文本:</strong> ${data.asr_text || '无'}<br>
+                            <strong>回复内容:</strong> ${data.chat_text || '无'}<br>
+                            <strong>音频格式:</strong> ${data.audio_format}<br>
+                            <strong>音频长度:</strong> ${data.audio_length} bytes
+                        </div>
+                        <div class="audio-controls">
+                            <audio controls>
+                                <source src="${audioData}" type="audio/wav">
+                                您的浏览器不支持音频播放
+                            </audio>
+                            <button onclick="downloadAudio('${data.audio_data}', 'processed_recording.pcm')">下载音频</button>
+                        </div>
+                    `;
+                } else {
+                    throw new Error(result.detail || '处理失败');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ 处理失败: ${error.message}</div>`;
+                resultDiv.innerHTML = '';
+            }
+        }
+
+        // 文件上传功能
+        const uploadArea = document.getElementById('uploadArea');
+        const audioFileInput = document.getElementById('audioFile');
+
+        // 拖放功能
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type.startsWith('audio/')) {
+                audioFileInput.files = files;
+                handleFileSelect();
+            }
+        });
+
+        audioFileInput.addEventListener('change', handleFileSelect);
+
+        function handleFileSelect() {
+            const file = audioFileInput.files[0];
+            const fileInfoDiv = document.getElementById('fileInfo');
+            const processBtn = document.getElementById('processBtn');
+            const processJSONBtn = document.getElementById('processJSONBtn');
+            
+            if (file) {
+                fileInfoDiv.innerHTML = `
+                    <div class="status success">
+                        ✅ 已选择文件: ${file.name}<br>
+                        大小: ${(file.size / 1024).toFixed(1)} KB<br>
+                        类型: ${file.type}
+                    </div>
+                `;
+                processBtn.disabled = false;
+                processJSONBtn.disabled = false;
+            } else {
+                fileInfoDiv.innerHTML = '';
+                processBtn.disabled = true;
+                processJSONBtn.disabled = true;
+            }
+        }
+
+        // 流式处理
+        async function processAudio() {
+            const file = audioFileInput.files[0];
+            if (!file) return;
+
+            const statusDiv = document.getElementById('uploadStatus');
+            const resultDiv = document.getElementById('uploadResult');
+            const progressContainer = document.getElementById('progressContainer');
+            const processBtn = document.getElementById('processBtn');
+            
+            processBtn.disabled = true;
+            progressContainer.style.display = 'block';
+            statusDiv.innerHTML = '<div class="status info">🔄 正在上传和处理...</div>';
+            resultDiv.innerHTML = '';
+
+            try {
+                const formData = new FormData();
+                formData.append('audio', file);
+
+                const response = await fetch(`${API_BASE}/api/v1/process-voice`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP ${response.status}`);
+                }
+
+                // 读取流式音频数据
+                const reader = response.body.getReader();
+                const audioChunks = [];
+                let receivedBytes = 0;
+                
+                statusDiv.innerHTML = '<div class="status info">📡 正在接收处理结果...</div>';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    audioChunks.push(value);
+                    receivedBytes += value.length;
+                    
+                    // 更新进度 (估算)
+                    const progress = Math.min(receivedBytes / (file.size * 2), 1) * 100;
+                    document.getElementById('progressBar').style.width = `${progress}%`;
+                }
+
+                // 合并音频数据
+                const totalLength = audioChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+                const combinedArray = new Uint8Array(totalLength);
+                let offset = 0;
+                for (const chunk of audioChunks) {
+                    combinedArray.set(chunk, offset);
+                    offset += chunk.length;
+                }
+
+                // 创建音频 Blob
+                const audioBlob = new Blob([combinedArray], { type: 'audio/pcm' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+
+                statusDiv.innerHTML = '<div class="status success">✅ 处理完成</div>';
+                resultDiv.innerHTML = `
+                    <div class="result-info">
+                        <strong>处理结果:</strong><br>
+                        接收到 ${audioChunks.length} 个音频块<br>
+                        总大小: ${(combinedArray.length / 1024).toFixed(1)} KB<br>
+                        格式: PCM 16-bit, 24kHz, 单声道
+                    </div>
+                    <div class="audio-controls">
+                        <audio controls>
+                            <source src="${audioUrl}" type="audio/wav">
+                            您的浏览器不支持音频播放
+                        </audio>
+                        <a href="${audioUrl}" download="processed_${file.name}.pcm">
+                            <button>下载处理结果</button>
+                        </a>
+                    </div>
+                `;
+
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ 处理失败: ${error.message}</div>`;
+                resultDiv.innerHTML = '';
+            } finally {
+                processBtn.disabled = false;
+                progressContainer.style.display = 'none';
+                document.getElementById('progressBar').style.width = '0%';
+            }
+        }
+
+        // JSON格式处理
+        async function processAudioJSON() {
+            const file = audioFileInput.files[0];
+            if (!file) return;
+
+            const statusDiv = document.getElementById('uploadStatus');
+            const resultDiv = document.getElementById('uploadResult');
+            const processJSONBtn = document.getElementById('processJSONBtn');
+            
+            processJSONBtn.disabled = true;
+            statusDiv.innerHTML = '<div class="status info">🔄 正在处理...</div>';
+            resultDiv.innerHTML = '';
+
+            try {
+                const formData = new FormData();
+                formData.append('audio', file);
+
+                const response = await fetch(`${API_BASE}/api/v1/process-voice-json`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    const data = result.data;
+                    statusDiv.innerHTML = '<div class="status success">✅ 处理完成</div>';
+                    
+                    resultDiv.innerHTML = `
+                        <div class="result-info">
+                            <strong>ASR识别文本:</strong> ${data.asr_text || '无识别结果'}<br>
+                            <strong>对话回复:</strong> ${data.chat_text || '无回复内容'}<br>
+                            <strong>音频格式:</strong> ${data.audio_format}<br>
+                            <strong>采样率:</strong> ${data.sample_rate} Hz<br>
+                            <strong>声道数:</strong> ${data.channels}<br>
+                            <strong>音频长度:</strong> ${data.audio_length} bytes
+                        </div>
+                        <div class="audio-controls">
+                            <audio controls>
+                                <source src="data:audio/pcm;base64,${data.audio_data}" type="audio/wav">
+                                您的浏览器不支持音频播放
+                            </audio>
+                            <button onclick="downloadAudio('${data.audio_data}', 'processed_${file.name}.pcm')">下载音频</button>
+                        </div>
+                    `;
+                } else {
+                    throw new Error(result.detail || '处理失败');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ 处理失败: ${error.message}</div>`;
+                resultDiv.innerHTML = '';
+            } finally {
+                processJSONBtn.disabled = false;
+            }
+        }
+
+        // 下载音频文件
+        function downloadAudio(base64Data, filename) {
+            const byteCharacters = atob(base64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: 'audio/pcm' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // 页面加载完成后检查服务状态
+        window.addEventListener('load', () => {
+            checkServiceStatus();
+        });
+    </script>
+</body>
+</html>
