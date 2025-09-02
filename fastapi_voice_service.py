@@ -277,7 +277,7 @@ class VoiceProcessor:
                         await self.send_silence()
                         
                         # 如果发送了很多静音数据还没收到响应，则退出
-                        if silence_count > 10:
+                        if silence_count > 1:
                             logger.error("❌ 发送了大量静音数据仍未收到响应，连接可能有问题")
                             break
                     else:
